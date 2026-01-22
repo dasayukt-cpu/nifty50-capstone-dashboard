@@ -1,90 +1,141 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
-import glob
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, r2_score
+import os
 
-st.set_page_config(page_title="NIFTY 50 Dashboard", layout="wide")
+st.set_page_config(page_title="NIFTY50 Capstone Dashboard", layout="wide")
 
-st.title("📊 NIFTY 50 Stock Analytics Dashboard")
-st.markdown("### Capstone Project — Portfolio Strategy & ML Forecasting")
+st.title("📊 NIFTY50 Portfolio Strategy & ML Forecasting Dashboard")
 
-# -------------------- LOAD DATA --------------------
+# ----------------------------------
+# Load Dataset (Safe)
+# ----------------------------------
 
-files = glob.glob("*.csv")
-stock_files = [f for f in files if "NIFTY50" not in f and "metadata" not in f]
+file_path = "NIFTY50_all.xlsb"
+
+if not os.path.exists(file_path):
+    st.error("❌ Dataset file missing: NIFTY50_all.xlsb")
+    st.stop()
 
 @st.cache_data
-def load_data():
-    df_list = []
-    for file in stock_files:
-        temp = pd.read_csv(file)
-        temp['Stock'] = file.replace(".csv","")
-        df_list.append(temp)
-    return pd.concat(df_list, ignore_index=True)
+def load_data(path):
+    return pd.read_excel(path, engine="pyxlsb")
 
-stocks_df = load_data()
+df = load_data(file_path)
 
-nifty = pd.read_csv("NIFTY50_all.csv")
+st.success("✅ Dataset Loaded Successfully")
 
-stocks_df['Date'] = pd.to_datetime(stocks_df['Date'])
-nifty['Date'] = pd.to_datetime(nifty['Date'])
+# ----------------------------------
+# Data Cleaning
+# ----------------------------------
 
-# -------------------- SIDEBAR --------------------
+df.columns = df.columns.str.strip()
+df['Date'] = pd.to_datetime(df['Date'])
+df.sort_values("Date", inplace=True)
 
-st.sidebar.header("🔧 Controls")
-stock_selected = st.sidebar.selectbox("Select Stock", sorted(stocks_df['Stock'].unique()))
+# ----------------------------------
+# Sidebar Controls
+# ----------------------------------
 
-# -------------------- MARKET TREND --------------------
+st.sidebar.header("⚙ Dashboard Controls")
 
-st.subheader("📈 NIFTY 50 Market Trend")
+stocks = sorted(df['Symbol'].unique())
+selected_stock = st.sidebar.selectbox("Select Stock", stocks)
 
-fig, ax = plt.subplots(figsize=(10,4))
-ax.plot(nifty['Date'], nifty['Close'])
-ax.set_title("NIFTY 50 Index Trend")
-ax.set_xlabel("Date")
-ax.set_ylabel("Index Value")
-st.pyplot(fig)
+# ----------------------------------
+# Stock Filter
+# ----------------------------------
 
-# -------------------- STOCK TREND --------------------
+stock_df = df[df['Symbol'] == selected_stock]
 
-st.subheader(f"📊 {stock_selected} Price Trend")
+# ----------------------------------
+# Price Trend Chart
+# ----------------------------------
 
-df_stock = stocks_df[stocks_df['Stock'] == stock_selected]
+st.subheader(f"📈 {selected_stock} Price Trend")
 
-fig, ax = plt.subplots(figsize=(10,4))
-ax.plot(df_stock['Date'], df_stock['Close'])
-ax.set_title(f"{stock_selected} Closing Price")
+fig, ax = plt.subplots(figsize=(12,5))
+ax.plot(stock_df['Date'], stock_df['Close'], label='Close Price')
 ax.set_xlabel("Date")
 ax.set_ylabel("Price")
+ax.legend()
 st.pyplot(fig)
 
-# -------------------- PORTFOLIO STRATEGY --------------------
+# ----------------------------------
+# Returns & Volatility
+# ----------------------------------
 
-st.subheader("🏆 Portfolio Strategy — Top 5 Stocks")
+stock_df['Return'] = stock_df['Close'].pct_change()
 
-stocks_df['Daily_Return'] = stocks_df.groupby('Stock')['Close'].pct_change()
+col1, col2, col3 = st.columns(3)
+col1.metric("Avg Daily Return", f"{stock_df['Return'].mean()*100:.2f}%")
+col2.metric("Volatility", f"{stock_df['Return'].std()*100:.2f}%")
+col3.metric("Total Return", f"{(stock_df['Close'].iloc[-1]/stock_df['Close'].iloc[0]-1)*100:.2f}%")
 
-summary = stocks_df.groupby('Stock')['Daily_Return'].agg(['mean','std'])
-summary['Sharpe'] = summary['mean'] / summary['std']
-top_5 = summary.sort_values(by='Sharpe', ascending=False).head(5)
+# ----------------------------------
+# ML Prediction Model
+# ----------------------------------
 
-st.dataframe(top_5)
+st.subheader("🤖 ML-Based Price Forecast")
 
-# -------------------- PORTFOLIO PERFORMANCE --------------------
+ml_df = stock_df[['Open','High','Low','Volume','Close']].dropna()
 
-st.subheader("📈 Portfolio Performance Trend")
+X = ml_df[['Open','High','Low','Volume']]
+y = ml_df['Close']
 
-portfolio_df = stocks_df[stocks_df['Stock'].isin(top_5.index)]
-portfolio_trend = portfolio_df.groupby('Date')['Close'].mean()
+X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2,random_state=42)
 
-fig, ax = plt.subplots(figsize=(10,4))
-ax.plot(portfolio_trend.index, portfolio_trend.values)
-ax.set_title("Portfolio Return Trend")
-ax.set_xlabel("Date")
-ax.set_ylabel("Average Close Price")
-st.pyplot(fig)
+model = RandomForestRegressor(n_estimators=200, random_state=42)
+model.fit(X_train, y_train)
 
-# -------------------- FOOTER --------------------
+pred = model.predict(X_test)
 
-st.success("Dashboard Loaded Successfully 🚀")
-st.caption("Capstone Project | Data Science & AI | NIFTY 50 Stock Analytics")
+rmse = np.sqrt(mean_squared_error(y_test, pred))
+r2 = r2_score(y_test, pred)
+
+st.write(f"**Model RMSE:** {rmse:.2f}")
+st.write(f"**Model R² Score:** {r2:.4f}")
+
+# ----------------------------------
+# Prediction Plot
+# ----------------------------------
+
+fig2, ax2 = plt.subplots(figsize=(12,5))
+ax2.plot(y_test.values[:100], label="Actual")
+ax2.plot(pred[:100], label="Predicted")
+ax2.legend()
+ax2.set_title("Actual vs Predicted Prices")
+st.pyplot(fig2)
+
+# ----------------------------------
+# Portfolio Strategy Section
+# ----------------------------------
+
+st.subheader("🎯 Portfolio Strategy Insights")
+
+portfolio_df = (
+    df.groupby('Symbol')['Close']
+    .agg(['mean','std','count'])
+    .reset_index()
+)
+
+portfolio_df['Risk'] = portfolio_df['std']
+portfolio_df['Return'] = portfolio_df['mean']
+
+top_stocks = portfolio_df.sort_values(by='Return', ascending=False).head(10)
+
+st.dataframe(top_stocks)
+
+st.markdown("""
+### 📌 Business Insights
+- High return stocks: Strong long-term growth candidates
+- High volatility stocks: Suitable for aggressive investors
+- Balanced portfolio: Mix of stable + high growth stocks
+""")
+
+st.success("🚀 Dashboard Loaded Successfully")
